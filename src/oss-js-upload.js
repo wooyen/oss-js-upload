@@ -107,26 +107,17 @@
     var self = this;
 
     var readFile = function (callback) {
-      var result = {
-        chunksHash: {},
-        chunks: []
-      };
       var blobSlice = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice;
       var chunkSize = self._config.chunkSize;
       var chunksNum = Math.ceil(file.size / chunkSize);
-      var currentChunk = 0;
-
-      var frOnload = function (e) {
-        result.chunks[currentChunk] = e.target.result;
-        currentChunk++;
-        if (currentChunk < chunksNum) {
-          loadNext();
-        }
-        else {
-          result.file_size = file.size;
-          callback(null, result);
-        }
+      var maxUploadTries = options.maxRetry || 3;
+      var loadedNum = 0;
+      var uploadId;
+      var multipartMap = {
+        Parts: []
       };
+
+      
       var frOnerror = function () {
         console.error("读取文件失败");
         if (typeof options.onerror == 'function') {
@@ -134,42 +125,21 @@
         }
       };
 
-      function loadNext() {
+      var loadNext = function(seq) {
         var fileReader = new FileReader();
-        fileReader.onload = frOnload;
+        fileReader.onload = function(e) {
+            uploadPart(seq, e.target.result);
+        };
         fileReader.onerror = frOnerror;
 
-        var start = currentChunk * chunkSize,
-            end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
+        if (seq >= chunksNum) {
+          return;
+        }
+        var start = seq * chunkSize;
+        var end = Math.min(start + chunkSize, file.size);
         var blobPacket = blobSlice.call(file, start, end);
         fileReader.readAsArrayBuffer(blobPacket);
       }
-
-      loadNext();
-    };
-
-    var uploadSingle = function (result, callback) {
-      var params = {
-        Bucket: self._config.bucket,
-        Key: options.key,
-        Body: result.chunks[0],
-        ContentType: file.type || ''
-      };
-      _extend(params, options.headers);
-
-      self.oss.putObject(params, callback);
-    };
-
-    var uploadMultipart = function (result, callback) {
-      var maxUploadTries = options.maxRetry || 3;
-      var uploadId;
-      var loadedNum = 0;
-      var latestUploadNum = -1;
-      var concurrency = 0;
-
-      var multipartMap = {
-        Parts: []
-      };
 
       var init = function () {
         var params = {
@@ -189,25 +159,15 @@
 
               // console.log("Got upload ID", res.UploadId);
               uploadId = res.UploadId;
-
-              uploadPart(0);
+              for (var i = 0; i < self._config.concurrency; i++) {
+                loadNext(i);
+              }
             });
       };
 
-      var uploadPart = function (partNum) {
-        if(partNum >= result.chunks.length) {
-          return;
-        }
-
-        concurrency++;
-        if(latestUploadNum < partNum) {
-          latestUploadNum = partNum;
-        }
-        if(concurrency < self._config.concurrency && (partNum < (result.chunks.length - 1))) {
-          uploadPart(partNum + 1);
-        }
+      var uploadPart = function (partNum, chunck) {
         var partParams = {
-          Body: result.chunks[partNum],
+          Body: chunck,
           Bucket: self._config.bucket,
           Key: options.key,
           PartNumber: String(partNum + 1),
@@ -232,7 +192,6 @@
               return;
             }
             // console.log(mData);
-            concurrency--;
 
             multipartMap.Parts[partNum] = {
               ETag: mData.ETag,
@@ -242,11 +201,11 @@
              //console.log('mData', mData);
 
             loadedNum++;
-            if (loadedNum == result.chunks.length) {
+            callback(null, null, loadedNum/chunksNum);
+            if (loadedNum == chunksNum) {
               complete();
-            }
-            else {
-              uploadPart(latestUploadNum + 1);
+            } else {
+              loadNext(partNum + self._config.concurrency);
             }
           });
         };
@@ -271,8 +230,7 @@
       init();
     };
 
-    readFile(function (err, result) {
-      var callback = function (err, res) {
+    readFile(function (err, res, progress) {
         if (err) {
           if (typeof options.onerror == 'function') {
             options.onerror(err);
@@ -280,17 +238,15 @@
           return;
         }
 
-        if (typeof options.oncomplete == 'function') {
-          options.oncomplete(res);
+        if (res) {
+          if (typeof options.oncomplete == 'function') {
+            options.oncomplete(res);
+          }
+          return;
         }
-      };
-
-      if (result.chunks.length == 1) {
-        uploadSingle(result, callback)
-      }
-      else {
-        uploadMultipart(result, callback);
-      }
+        if (typeof options.onprogress == 'function') {
+          options.onprogress(progress);
+        }
     });
 
   };
