@@ -125,7 +125,7 @@
         }
       };
 
-      var loadNext = function(seq) {
+      function loadNext(seq) {
         var fileReader = new FileReader();
         fileReader.onload = function(e) {
             uploadPart(seq, e.target.result);
