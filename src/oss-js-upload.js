@@ -165,9 +165,9 @@
             });
       };
 
-      var uploadPart = function (partNum, chunck) {
+      var uploadPart = function (partNum, chunk) {
         var partParams = {
-          Body: chunck,
+          Body: chunk,
           Bucket: self._config.bucket,
           Key: options.key,
           PartNumber: String(partNum + 1),
