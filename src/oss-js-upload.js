@@ -125,18 +125,18 @@
         }
       };
 
-      function loadNext(seq) {
+      function loadNext(currentChunk) {
         var fileReader = new FileReader();
         fileReader.onload = function(e) {
-            uploadPart(seq, e.target.result);
+            uploadPart(currentChunk, e.target.result);
         };
         fileReader.onerror = frOnerror;
 
-        if (seq >= chunksNum) {
+        if (currentChunk >= chunksNum) {
           return;
         }
-        var start = seq * chunkSize;
-        var end = Math.min(start + chunkSize, file.size);
+        var start = currentChunk * chunkSize,
+            end = Math.min(start + chunkSize, file.size);
         var blobPacket = blobSlice.call(file, start, end);
         fileReader.readAsArrayBuffer(blobPacket);
       }
