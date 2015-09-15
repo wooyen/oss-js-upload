@@ -126,15 +126,15 @@
       };
 
       function loadNext(currentChunk) {
+        if (currentChunk >= chunksNum) {
+          return;
+        }
+
         var fileReader = new FileReader();
         fileReader.onload = function(e) {
             uploadPart(currentChunk, e.target.result);
         };
         fileReader.onerror = frOnerror;
-
-        if (currentChunk >= chunksNum) {
-          return;
-        }
         var start = currentChunk * chunkSize,
             end = Math.min(start + chunkSize, file.size);
         var blobPacket = blobSlice.call(file, start, end);
