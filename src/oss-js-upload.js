@@ -79,222 +79,134 @@
 
   }
 
-  OssUpload.prototype.upload = function (options) {
-    if (!options) {
-      if (typeof options.onerror == 'function') {
-        options.onerror('需要 options');
-      }
-      return;
-    }
+	OssUpload.prototype.upload = function (options) {
+		if (!options) {
+		  if (typeof options.onerror == 'function') {
+			options.onerror('需要 options');
+		  }
+		  return;
+		}
 
-    if (!options.file) {
-      if (typeof options.onerror == 'function') {
-        options.onerror('需要 file');
-      }
-      return;
-    }
-    var file = options.file;
+		if (!options.file) {
+		  if (typeof options.onerror == 'function') {
+			options.onerror('需要 file');
+		  }
+		  return;
+		}
+		var file = options.file;
 
-    if (!options.key) {
-      if (typeof options.onerror == 'function') {
-        options.onerror('需要 key');
-      }
-      return;
-    }
-    // 去掉 key 开头的 /
-    options.key.replace(new RegExp("^\/"), '');
+		if (!options.key) {
+		  if (typeof options.onerror == 'function') {
+			options.onerror('需要 key');
+		  }
+		  return;
+		}
+		// 去掉 key 开头的 /
+		options.key.replace(new RegExp("^\/"), '');
+		
+		var callback = function(err, res, progress) {
+			if (err) {
+				if (typeof options.onerror == 'function') {
+					options.onerror(err);
+				}
+				return;
+			}
+			if (res) {
+				if (typeof options.oncomplete == 'function') {
+					options.oncomplete(res);
+				}
+				return;
+			}
+			if (typeof options.onprogress == 'function') {
+				options.onprogress(progress);
+			}
+		};
+		
+		var self = this;
+		var blobSlice = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice;
+		var chunkSize = self._config.chunkSize;
+		var chunksNum = Math.ceil(file.size / chunkSize);
+		var maxRetries = options.maaxRetry || 3;
+		var completedNum = 0;
+		var currentPart = 0;
+		var multipartMap = {
+			Parts: []
+		};
+		var params = {
+			Bucket: self._config.bucket,
+			Key: options.key,
+			ContentType: file.type || ''
+		};
+		_extend(params, options.headers);
+		self.oss.createMultipartUpload(params, function(mpErr, res) {
+			if (mpErr) {
+				if (typeof options.onerror == 'function') {
+					options.onerror(err);
+				}
+				return;
+			}
+			var uploadId = res.UploadId;
+			uploadChunck(uploadId);
+		});
 
-    var self = this;
-
-    var readFile = function (callback) {
-      var result = {
-        chunksHash: {},
-        chunks: []
-      };
-      var blobSlice = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice;
-      var chunkSize = self._config.chunkSize;
-      var chunksNum = Math.ceil(file.size / chunkSize);
-      var currentChunk = 0;
-
-      var frOnload = function (e) {
-        result.chunks[currentChunk] = e.target.result;
-        currentChunk++;
-        if (currentChunk < chunksNum) {
-          loadNext();
-        }
-        else {
-          result.file_size = file.size;
-          callback(null, result);
-        }
-      };
-      var frOnerror = function () {
-        console.error("读取文件失败");
-        if (typeof options.onerror == 'function') {
-          options.onerror("读取文件失败");
-        }
-      };
-
-      function loadNext() {
-        var fileReader = new FileReader();
-        fileReader.onload = frOnload;
-        fileReader.onerror = frOnerror;
-
-        var start = currentChunk * chunkSize,
-            end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
-        var blobPacket = blobSlice.call(file, start, end);
-        fileReader.readAsArrayBuffer(blobPacket);
-      }
-
-      loadNext();
-    };
-
-    var uploadSingle = function (result, callback) {
-      var params = {
-        Bucket: self._config.bucket,
-        Key: options.key,
-        Body: result.chunks[0],
-        ContentType: file.type || ''
-      };
-      _extend(params, options.headers);
-
-      self.oss.putObject(params, callback);
-    };
-
-    var uploadMultipart = function (result, callback) {
-      var maxUploadTries = options.maxRetry || 3;
-      var uploadId;
-      var loadedNum = 0;
-      var latestUploadNum = -1;
-      var concurrency = 0;
-
-      var multipartMap = {
-        Parts: []
-      };
-
-      var init = function () {
-        var params = {
-          Bucket: self._config.bucket,
-          Key: options.key,
-          ContentType: file.type || ''
-        };
-        _extend(params, options.headers);
-
-        self.oss.createMultipartUpload(params,
-            function (mpErr, res) {
-              if (mpErr) {
-                // console.log('Error!', mpErr);
-                callback(mpErr);
-                return;
-              }
-
-              // console.log("Got upload ID", res.UploadId);
-              uploadId = res.UploadId;
-
-              uploadPart(0);
-            });
-      };
-
-      var uploadPart = function (partNum) {
-        if(partNum >= result.chunks.length) {
-          return;
-        }
-
-        concurrency++;
-        if(latestUploadNum < partNum) {
-          latestUploadNum = partNum;
-        }
-        if(concurrency < self._config.concurrency && (partNum < (result.chunks.length - 1))) {
-          uploadPart(partNum + 1);
-        }
-        var partParams = {
-          Body: result.chunks[partNum],
-          Bucket: self._config.bucket,
-          Key: options.key,
-          PartNumber: String(partNum + 1),
-          UploadId: uploadId
-        };
-
-        var tryNum = 1;
-
-        var doUpload = function () {
-          self.oss.uploadPart(partParams, function (multiErr, mData) {
-            if (multiErr) {
-              // console.log('multiErr, upload part error:', multiErr);
-              if (tryNum > maxUploadTries) {
-                console.log('上传分片失败: #', partParams.PartNumber);
-                callback(multiErr);
-              }
-              else {
-                console.log('重新上传分片: #', partParams.PartNumber);
-                tryNum++;
-                doUpload();
-              }
-              return;
-            }
-            // console.log(mData);
-            concurrency--;
-
-            multipartMap.Parts[partNum] = {
-              ETag: mData.ETag,
-              PartNumber: partNum + 1
-            };
-             console.log("Completed part", partNum + 1);
-             //console.log('mData', mData);
-
-            loadedNum++;
-            if (loadedNum == result.chunks.length) {
-              complete();
-            }
-            else {
-              uploadPart(latestUploadNum + 1);
-            }
-          });
-        };
-
-        doUpload();
-
-      };
-
-      var complete = function () {
-        // console.log("Completing upload...");
-
-        var doneParams = {
-          Bucket: self._config.bucket,
-          Key: options.key,
-          CompleteMultipartUpload: multipartMap,
-          UploadId: uploadId
-        };
-
-        self.oss.completeMultipartUpload(doneParams, callback);
-      };
-
-      init();
-    };
-
-    readFile(function (err, result) {
-      var callback = function (err, res) {
-        if (err) {
-          if (typeof options.onerror == 'function') {
-            options.onerror(err);
-          }
-          return;
-        }
-
-        if (typeof options.oncomplete == 'function') {
-          options.oncomplete(res);
-        }
-      };
-
-      if (result.chunks.length == 1) {
-        uploadSingle(result, callback)
-      }
-      else {
-        uploadMultipart(result, callback);
-      }
-    });
-
-  };
-
-  window.OssUpload = OssUpload;
-
+		var uploadChunck = function(id) {
+			var frOnload = function(e) {
+				var partParams = {
+					Body: e.target.result,
+					Bucket: self._config.bucket,
+					Key: options.key,
+					PartNumber: String(currentPart + 1),
+					UploadId: id
+				};
+				var tryNum = 0;
+				var doUpload = function() {
+					self.oss.uploadPart(partParams, function(multiErr, mData) {
+						if (multiErr) {
+							if (tryNum > maxRetries) {
+								console.log('上传分片失败: #', partParams.PartNumber);
+								callback(multiErr);
+							} else {
+								console.log('重新上传分片: #', partParams.PartNumber);
+								tryNum++;
+								doUpload();
+							}
+							return;
+						}
+						multipartMap.Parts[currentPart] = {
+							ETag: mData.ETag,
+							PartNumber: currentPart + 1
+						};
+						currentPart++;
+						callback(null, null, currentPart/chunksNum);
+						if (currentPart == chunksNum) {
+							var doneParams = {
+								Bucket: self._config.bucket,
+								Key: options.key,
+								CompleteMultipartUpload: multipartMap,
+								UploadId: id
+							}
+							self.oss.completeMultipartUpload(doneParams, callback);
+						} else {
+							uploadChunck(id);
+						}
+					});
+				};
+				doUpload();
+			};
+			var frOnerror = function() {
+				console.error("读取文件失败");
+				callback("读取文件失败");
+			}
+			var reader = new FileReader();
+			reader.onload = frOnload;
+			reader.onerror = frOnerror;
+			var start = currentPart * chunkSize;
+			var end = start + chunkSize;
+			if (end > file.size) {
+				end = file.size;
+			}
+			reader.readAsArrayBuffer(blobSlice.call(file, start, end));
+		};
+	};
+	window.OssUpload = OssUpload;
 })();

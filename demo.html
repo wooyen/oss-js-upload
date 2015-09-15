@@ -86,7 +86,10 @@
               // 文件上传成功调用, 可选参数
               oncomplete: function (res) {
                 console.log(res);
-              }
+              },
+			  onprogress: function (progress) {
+				console.log("progress: ", progress);
+			  }
             });
           }
 
